@@ -1,0 +1,97 @@
+1. include/linux/init_task.h  -> change default sched policy = SCHED_WRR
+			         , initialize wrr members
+   kernel/kthread.c	      -> sched_setschedular_nocheck(,SCHED_WRR,)
+   kernel/sched/core.c 	      -> __sched_setschedular(~)의 3903 line
+				policy check 하는 부분에 SCHED_WRR 추가
+
+2. include/uapi/linux/sched.h -> #define SCHED_WRR 6
+
+3. include/linux/sched.h      -> task_struct 구조체에 wrr_sched_entity 멤버 추가
+
+4. kernel/sched/core.c 	      -> init_sched_init(void)에서 
+ 				 wrr_rq의 멤버변수 초기화 함수인  init_wrr_rq(&rq->wrr, rq) 호출
+				 init_wrr_rq(&rq->wrr, rq)에서 rq의 멤버변수 초기화
+
+5. kernel/sched/sched.h	      -> (1)wrr_sched_entity 정의 (timeslice, weight, runlist, pushable)
+			      -> (2)wrr_rq 정의 (queue, wrr_nr_running, weight_sum)
+			      -> (3)struct rq 구조체에 wrr_rq 멤버 추가
+
+6. kernel/sched/rt.c,wrr.c,fair.c -> sched_class 정의문에서 .next 바꾸기
+					 (rt -> wrr -> fair의 순서로)
+7. kernel/sched/wrr.c 짜기!    
+ 
+
+8. MAKEFILE에 wrr.o 추가
+
+
+
+
+**. kernel/sched/sched.h      -> extern void init_wrr_rq(struct wrr_rq *wrr_rq) 선언
+				 extern const struct sched_class wrr_sched_class;
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////
+
+LOCK의 사용 여러 Processor가 wrr_rq의 멤버변수에 접근하는 것을 방지 
+
+1. kernel/sched/sched.h 		-> struct wrr_rq의 멤버변수에 raw_spin_lock 추가
+2. kernel/sched/rt.c		-> init_rt_rq에서 raw_spin_lock_init() spinlock 초기화
+
+
+Load Balancing 함수에서 task_struct->wrr
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////
+
+1. kernel/sched/core.c		-> 	struct hrtimer wrr_rebalance_timer
+	(1)함수 void __init sched_init에서
+		[1] hrtimer_init(&wrr_loadbalance_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+		[2] wrr_loadbalance_timer.functon = wrr_load_balance;
+								
+	(2)함수__init sched_init_smp에서	init_hrtick() 뒤에 hrtimer_start(&wrr_loadbalance_timer, period_ktime, HRTIMER_MODE_REL); 선언
+
+	(3)함수 void init_sched_init(void)에서 ktime = 2000 설정
+
+
+2. LOAD BALANCING 함수		->	wrr.c
+				 	static enum hrtimer_restart wrr_load_balance()
+
+   (1) for_each_online_cpu에서 highest run queue와 lowest run queue를 찾는다.
+   (2) max_movable_weight = (hrq_weight_sum - low_weight_sum / 2) 
+   (3) higest run queue를 순회하면서 
+       pushable == 1이고, 
+       max_movable_weight보다 작거나 같은 weight의 j: 중 가장 큰 것을 옮긴다! 
+
+
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+System Call 함수 추가
+
+1. system call number register
+-> /arch/arm/include/asm/unistd.h
+-> /arch/arm/include/uapi/asm/unistd.h
+
+
+2. system call table register 
+-> /arch/arm/kernel/calls.S
+
+3. system call function declaration
+-> /include/linux/syscalls.h
+
+4. system call function defined in
+-> /kernel/sched/core.c
+
+int sched_setweight(pid_t pid, int weight);
+
+int sched_getweight(pid_t pid);
+
+
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////
+
+To provide SMP
+
+1. task가 가장 낮은 weight의 CPU로 들어가게 하기 위해 select_Task_RQ
+
+2. Load Balancing
+
